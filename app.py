@@ -4,7 +4,7 @@ import pandas as pd
 # Configuración para que se vea bien en móviles
 st.set_page_config(page_title="Buscador UTU", layout="centered")
 
-st.title("🔎 Consulta de Horas")
+st.title("🔎 Consulta de horas vacantes")
 
 uploaded_file = st.file_uploader("Subir planilla", type=["xlsx", "csv"])
 
