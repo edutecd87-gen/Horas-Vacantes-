@@ -1,45 +1,65 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
+import re
 
-# Configuración para que se vea bien en móviles
-st.set_page_config(page_title="Buscador UTU", layout="centered")
+# Configuración de página
+st.set_page_config(page_title="Gestor de Vacantes UTU", layout="wide")
 
-st.title("🔎 Consulta de horas vacantes")
+st.title("Conversor y Buscador de Vacantes")
 
-uploaded_file = st.file_uploader("Subir planilla", type=["xlsx", "csv"])
-
-if uploaded_file:
-    # Carga de datos
-    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+def extraer_datos_pdf(archivo_pdf):
+    filas_finales = []
+    with pdfplumber.open(archivo_pdf) as pdf:
+        for pagina in pdf.pages:
+            tabla = pagina.extract_table()
+            if tabla:
+                for fila in tabla:
+                    # Limpiamos filas vacías
+                    fila_limpia = [celda.replace('\n', ' ') if celda else "" for celda in fila]
+                    if any(fila_limpia): 
+                        filas_finales.append(fila_limpia)
     
-    # En móviles, los filtros expandibles funcionan mejor que la barra lateral
-    with st.expander("⚙️ Toca aquí para filtrar"):
-        # Usamos multiselect para que sea fácil elegir con el dedo
-        depto = st.multiselect("Departamento", options=sorted(df["Departamento"].unique().astype(str)))
-        area = st.multiselect("Área", options=sorted(df["Área"].unique().astype(str)))
-        turno = st.multiselect("Turno", options=sorted(df["Turno"].unique().astype(str)))
-        dias = st.multiselect("Días", options=sorted(df["Día"].unique().astype(str)))
-        
-        btn_buscar = st.button("Aplicar Filtros", use_container_width=True)
+    # Creamos el DataFrame usando la primera fila como encabezado
+    if filas_finales:
+        df = pd.DataFrame(filas_finales[1:], columns=filas_finales[0])
+        return df
+    return None
 
-    if btn_buscar:
-        # Lógica de filtrado
-        mask = pd.Series([True] * len(df))
-        if depto: mask &= df["Departamento"].isin(depto)
-        if area: mask &= df["Área"].isin(area)
-        if turno: mask &= df["Turno"].isin(turno)
-        if dias: mask &= df["Día"].isin(dias)
+# --- INTERFAZ ---
+archivo = st.file_uploader("Sube tu PDF de vacantes o Excel", type=["pdf", "xlsx"])
+
+if archivo:
+    if archivo.name.endswith('.pdf'):
+        with st.spinner('Procesando PDF de UTU...'):
+            df = extraer_datos_pdf(archivo)
+            st.success("¡PDF convertido a tabla!")
+    else:
+        df = pd.read_excel(archivo)
+
+    if df is not None:
+        # Mostramos los filtros que pediste
+        st.subheader("Filtros de búsqueda")
+        col1, col2, col3, col4 = st.columns(4)
         
-        resultados = df[mask]
+        with col1:
+            # Adaptamos nombres de columnas según el PDF de UTU
+            deptos = st.multiselect("Departamento", options=df.iloc[:, 1].unique()) # Generalmente columna 1
+        with col2:
+            areas = st.multiselect("Área", options=df.iloc[:, 2].unique())
+        with col3:
+            turnos = st.multiselect("Turno", options=df.iloc[:, 3].unique())
         
-        st.success(f"Encontradas: {len(resultados)} vacantes")
-        
-        # Formato de tarjetas para celular (en lugar de una tabla ancha)
-        for i, row in resultados.iterrows():
-            with st.container(border=True):
-                st.markdown(f"**{row['Área']}**")
-                st.caption(f"📍 {row['Centro']} - {row['Turno']}")
-                st.write(f"📅 {row['Día']} | 🕒 {row['Hora Inicio']} a {row['Hora Fin']}")
-                if 'Texto Original' in df.columns:
-                    with st.expander("Ver detalles"):
-                        st.write(row['Texto Original'])
+        # Botón de búsqueda
+        if st.button("Buscar vacantes"):
+            # Aquí aplicamos el filtrado (ejemplo simple)
+            resultado = df.copy()
+            if deptos:
+                resultado = resultado[resultado.iloc[:, 1].isin(deptos)]
+            
+            st.dataframe(resultado)
+            
+            # Botón para descargar el Excel ya convertido
+            csv = resultado.to_csv(index=False).encode('utf-8')
+            st.download_button("Descargar esta lista en Excel/CSV", csv, "vacantes_filtradas.csv", "text/csv")
+
