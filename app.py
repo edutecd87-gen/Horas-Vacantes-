@@ -1,65 +1,68 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-import re
 
-# Configuración de página
-st.set_page_config(page_title="Gestor de Vacantes UTU", layout="wide")
+st.set_page_config(page_title="Buscador UTU", layout="wide")
 
-st.title("Conversor y Buscador de Vacantes")
+st.title("🔎 Consulta de Vacantes")
 
-def extraer_datos_pdf(archivo_pdf):
-    filas_finales = []
-    with pdfplumber.open(archivo_pdf) as pdf:
-        for pagina in pdf.pages:
-            tabla = pagina.extract_table()
-            if tabla:
-                for fila in tabla:
-                    # Limpiamos filas vacías
-                    fila_limpia = [celda.replace('\n', ' ') if celda else "" for celda in fila]
-                    if any(fila_limpia): 
-                        filas_finales.append(fila_limpia)
-    
-    # Creamos el DataFrame usando la primera fila como encabezado
-    if filas_finales:
-        df = pd.DataFrame(filas_finales[1:], columns=filas_finales[0])
+def procesar_archivo(file):
+    if file.name.endswith('.pdf'):
+        datos = []
+        with pdfplumber.open(file) as pdf:
+            for pagina in pdf.pages:
+                tabla = pagina.extract_table()
+                if tabla:
+                    datos.extend(tabla)
+        if not datos: return None
+        # En los PDF de UTU, el Depto suele estar en la fila que dice "10 MONTEVIDEO", etc.
+        # Creamos un DataFrame base
+        df = pd.DataFrame(datos)
+        # Limpieza básica: quitar saltos de línea
+        df = df.map(lambda x: str(x).replace('\n', ' ') if x else "")
+        
+        # Intentamos asignar nombres de columnas estándar para que aparezcan los filtros
+        # Basado en tu PDF: Col 1 es Depto, Col 2 es Centro/Área
+        columnas_finales = ["ID", "Departamento", "Centro_Area", "Turno_Detalle", "Horario", "Llamado"]
+        df.columns = columnas_finales[:len(df.columns)]
         return df
-    return None
+    else:
+        return pd.read_excel(file)
 
-# --- INTERFAZ ---
-archivo = st.file_uploader("Sube tu PDF de vacantes o Excel", type=["pdf", "xlsx"])
+archivo = st.file_uploader("Sube tu PDF o Excel aquí", type=["pdf", "xlsx"])
 
 if archivo:
-    if archivo.name.endswith('.pdf'):
-        with st.spinner('Procesando PDF de UTU...'):
-            df = extraer_datos_pdf(archivo)
-            st.success("¡PDF convertido a tabla!")
-    else:
-        df = pd.read_excel(archivo)
-
+    df = procesar_archivo(archivo)
+    
     if df is not None:
-        # Mostramos los filtros que pediste
-        st.subheader("Filtros de búsqueda")
-        col1, col2, col3, col4 = st.columns(4)
+        # --- ESTA PARTE GENERA LOS FILTROS QUE NO TE APARECÍAN ---
+        st.sidebar.header("Filtros de Búsqueda")
         
-        with col1:
-            # Adaptamos nombres de columnas según el PDF de UTU
-            deptos = st.multiselect("Departamento", options=df.iloc[:, 1].unique()) # Generalmente columna 1
-        with col2:
-            areas = st.multiselect("Área", options=df.iloc[:, 2].unique())
-        with col3:
-            turnos = st.multiselect("Turno", options=df.iloc[:, 3].unique())
+        # Filtro 1: Departamento
+        lista_deptos = sorted([x for x in df["Departamento"].unique() if x.strip()])
+        depto_sel = st.sidebar.multiselect("Seleccionar Departamento", options=lista_deptos)
         
-        # Botón de búsqueda
-        if st.button("Buscar vacantes"):
-            # Aquí aplicamos el filtrado (ejemplo simple)
-            resultado = df.copy()
-            if deptos:
-                resultado = resultado[resultado.iloc[:, 1].isin(deptos)]
-            
-            st.dataframe(resultado)
-            
-            # Botón para descargar el Excel ya convertido
-            csv = resultado.to_csv(index=False).encode('utf-8')
-            st.download_button("Descargar esta lista en Excel/CSV", csv, "vacantes_filtradas.csv", "text/csv")
+        # Filtro 2: Turno (intentamos extraerlo de la columna correspondiente)
+        col_turno = "Turno_Detalle" if "Turno_Detalle" in df.columns else df.columns[3]
+        lista_turnos = sorted([x for x in df[col_turno].unique() if x.strip()])
+        turno_sel = st.sidebar.multiselect("Seleccionar Turno", options=lista_turnos)
 
+        # Botón de búsqueda
+        if st.sidebar.button("Realizar Búsqueda", use_container_width=True):
+            resultado = df.copy()
+            if depto_sel:
+                resultado = resultado[resultado["Departamento"].isin(depto_sel)]
+            if turno_sel:
+                resultado = resultado[resultado[col_turno].isin(turno_sel)]
+            
+            st.success(f"Resultados encontrados: {len(resultado)}")
+            st.dataframe(resultado, use_container_width=True)
+            
+            # Opción para descargar lo filtrado
+            csv = resultado.to_csv(index=False).encode('utf-8')
+            st.download_button("Descargar esta lista", csv, "busqueda.csv", "text/csv")
+    else:
+        st.warning("No se detectaron tablas en el archivo. Asegúrate de que no sea una foto.")
+
+else:
+    st.info("💡 Consejo: Al subir el PDF, la web extraerá automáticamente los Departamentos y Turnos para que los elijas.")
