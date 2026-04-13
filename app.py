@@ -1,76 +1,45 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
 
-st.set_page_config(page_title="Buscador UTU PRO", layout="wide")
+# Configuración para que se vea bien en móviles
+st.set_page_config(page_title="Buscador UTU", layout="centered")
 
-st.title("🔎 Buscador de Vacantes UTU")
+st.title("🔎 Consulta de Horas")
 
-def extraer_limpio(archivo):
-    datos = []
-    with pdfplumber.open(archivo) as pdf:
-        for pagina in pdf.pages:
-            tabla = pagina.extract_table()
-            if tabla:
-                for fila in tabla:
-                    # Limpiar ruidos del PDF
-                    celdas = [str(c).replace('\n', ' ').strip() for c in fila if c]
-                    if len(celdas) > 2:
-                        datos.append(celdas)
-    return datos
+uploaded_file = st.file_uploader("Subir planilla", type=["xlsx", "csv"])
 
-archivo = st.file_uploader("Subir PDF de Vacantes", type=["pdf", "xlsx"])
-
-if archivo:
-    # 1. Procesamiento de datos
-    filas = extraer_limpio(archivo)
-    if filas:
-        df = pd.DataFrame(filas)
+if uploaded_file:
+    # Carga de datos
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+    
+    # En móviles, los filtros expandibles funcionan mejor que la barra lateral
+    with st.expander("⚙️ Toca aquí para filtrar"):
+        # Usamos multiselect para que sea fácil elegir con el dedo
+        depto = st.multiselect("Departamento", options=sorted(df["Departamento"].unique().astype(str)))
+        area = st.multiselect("Área", options=sorted(df["Área"].unique().astype(str)))
+        turno = st.multiselect("Turno", options=sorted(df["Turno"].unique().astype(str)))
+        dias = st.multiselect("Días", options=sorted(df["Día"].unique().astype(str)))
         
-        # 2. Lógica inteligente para encontrar Depto y Turno
-        # Buscamos en todo el texto de la fila para no errar
-        texto_completo = df.astype(str).apply(lambda x: ' '.join(x), axis=1)
-        
-        # Lista de departamentos de Uruguay para filtrar
-        deptos_uy = ["MONTEVIDEO", "CANELONES", "SORIANO", "COLONIA", "SAN JOSE", "MALDONADO", 
-                     "ROCHA", "RIVERA", "PAYSANDU", "SALTO", "ARTIGAS", "FLORIDA", "DURAZNO"]
-        
-        # --- FILTROS EN LA BARRA LATERAL ---
-        st.sidebar.header("Opciones de búsqueda")
-        
-        # Filtro de Departamento
-        depto_seleccionado = st.sidebar.multiselect(
-            "Seleccionar Departamento", 
-            options=deptos_uy,
-            help="Busca el nombre del departamento en cualquier parte de la fila"
-        )
-        
-        # Filtro de Turno
-        turnos_posibles = ["MATUTINO", "VESPERTINO", "NOCTURNO", "DOBLE HORARIO"]
-        turno_seleccionado = st.sidebar.multiselect("Seleccionar Turno", options=turnos_posibles)
+        btn_buscar = st.button("Aplicar Filtros", use_container_width=True)
 
-        # 3. Botón de Acción
-        if st.sidebar.button("Filtrar Resultados", use_container_width=True):
-            df_final = df.copy()
-            
-            # Filtrado por texto (muy efectivo para PDFs desordenados)
-            if depto_seleccionado:
-                # Se queda con las filas que mencionen alguno de los departamentos elegidos
-                patron = '|'.join(depto_seleccionado)
-                df_final = df_final[texto_completo.str.contains(patron, case=False, na=False)]
-            
-            if turno_seleccionado:
-                patron_turno = '|'.join(turno_seleccionado)
-                df_final = df_final[texto_completo.str.contains(patron_turno, case=False, na=False)]
-
-            # 4. Mostrar resultados
-            st.success(f"Se encontraron {len(df_final)} filas que coinciden.")
-            st.dataframe(df_final, use_container_width=True)
-            
-            # Botón para descargar
-            csv = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar esta selección", csv, "vacantes_utu.csv", "text/csv")
-    else:
-        st.error("No se pudo leer el contenido del PDF. Verifica que sea un documento de texto y no una foto.")
-else:
-    st.info("👋 Sube el PDF de vacantes para activar los filtros de Departamento y Turno.")
+    if btn_buscar:
+        # Lógica de filtrado
+        mask = pd.Series([True] * len(df))
+        if depto: mask &= df["Departamento"].isin(depto)
+        if area: mask &= df["Área"].isin(area)
+        if turno: mask &= df["Turno"].isin(turno)
+        if dias: mask &= df["Día"].isin(dias)
+        
+        resultados = df[mask]
+        
+        st.success(f"Encontradas: {len(resultados)} vacantes")
+        
+        # Formato de tarjetas para celular (en lugar de una tabla ancha)
+        for i, row in resultados.iterrows():
+            with st.container(border=True):
+                st.markdown(f"**{row['Área']}**")
+                st.caption(f"📍 {row['Centro']} - {row['Turno']}")
+                st.write(f"📅 {row['Día']} | 🕒 {row['Hora Inicio']} a {row['Hora Fin']}")
+                if 'Texto Original' in df.columns:
+                    with st.expander("Ver detalles"):
+                        st.write(row['Texto Original'])
