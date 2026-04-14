@@ -1,5 +1,3 @@
-st.write("Columnas detectadas:")
-st.write(df.columns.tolist())
 import streamlit as st
 import pandas as pd
 import unicodedata
