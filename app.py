@@ -1,81 +1,114 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
+import re
+from io import BytesIO
 
-st.set_page_config(page_title="Buscador UTU", layout="centered")
+st.set_page_config(page_title="Vacantes UTU", layout="wide")
 
-st.title("🔎 Consulta de Horas Vacantes")
+st.title("📚 Buscador de Horas Vacantes")
+st.markdown("Subí el PDF oficial y filtrá por Departamento, Localidad y Turno.")
 
-uploaded_file = st.file_uploader("Subir planilla", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("Subir PDF de Horas Vacantes", type="pdf")
+
+def limpiar_texto(texto):
+    texto = texto.replace("\n", " ")
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+def extraer_datos(pdf):
+    registros = []
+
+    with pdfplumber.open(pdf) as pdf_file:
+        texto_completo = ""
+        for pagina in pdf_file.pages:
+            texto_completo += pagina.extract_text() + "\n"
+
+    lineas = texto_completo.split("\n")
+
+    departamento_actual = ""
+    localidad = ""
+    turno = ""
+
+    for linea in lineas:
+        linea = limpiar_texto(linea)
+
+        # Detectar departamento
+        if re.match(r"\d+\s+[A-ZÁÉÍÓÚÑ ]+", linea):
+            departamento_actual = linea
+
+        # Detectar centros educativos
+        if "ESCUELA" in linea or "INSTITUTO" in linea or "C.E.A." in linea:
+            localidad = linea
+
+        # Detectar turno
+        if "MATUTINO" in linea:
+            turno = "MATUTINO"
+        elif "VESPERTINO" in linea:
+            turno = "VESPERTINO"
+        elif "NOCTURNO" in linea:
+            turno = "NOCTURNO"
+        elif "DOBLE HORARIO" in linea:
+            turno = "DOBLE HORARIO"
+
+        # Detectar asignaturas (simplificado)
+        if any(palabra in linea for palabra in ["BIOLOGIA", "QUIMICA", "GASTRONOMIA", "ADMINISTRACION", "DIBUJO"]):
+            registros.append({
+                "Departamento": departamento_actual,
+                "Localidad": localidad,
+                "Asignatura": linea,
+                "Turno": turno
+            })
+
+    df = pd.DataFrame(registros)
+    return df
 
 if uploaded_file:
 
-    # Leer archivo
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
+    with st.spinner("Procesando PDF..."):
+        df = extraer_datos(uploaded_file)
+
+    if df.empty:
+        st.error("No se pudieron extraer datos. Verificá el formato del PDF.")
     else:
-        df = pd.read_excel(uploaded_file)
+        st.success("PDF procesado correctamente.")
 
-    # Eliminar filas completamente vacías
-    df = df.dropna(how="all")
+        col1, col2, col3 = st.columns(3)
 
-    # Convertir todo a texto y limpiar espacios
-    for col in df.columns:
-        df[col] = df[col].astype(str).str.strip()
+        with col1:
+            deptos = sorted(df["Departamento"].dropna().unique())
+            depto_sel = st.selectbox("Departamento", ["Todos"] + deptos)
 
-    st.success("Archivo cargado correctamente")
+        if depto_sel != "Todos":
+            df_filtrado = df[df["Departamento"] == depto_sel]
+        else:
+            df_filtrado = df.copy()
 
-    # 🔎 Mostrar columnas para verificar
-    # st.write(df.head())
+        with col2:
+            localidades = sorted(df_filtrado["Localidad"].dropna().unique())
+            localidad_sel = st.selectbox("Localidad", ["Todas"] + localidades)
 
-    # ========================
-    # FILTROS
-    # ========================
-    with st.expander("⚙️ Toca aquí para filtrar", expanded=True):
+        if localidad_sel != "Todas":
+            df_filtrado = df_filtrado[df_filtrado["Localidad"] == localidad_sel]
 
-        depto_opts = sorted([x for x in df["Departamento"].unique() if x != "nan"])
-        area_opts = sorted([x for x in df["Área"].unique() if x != "nan"])
-        turno_opts = sorted([x for x in df["Turno"].unique() if x != "nan"])
-        dia_opts = sorted([x for x in df["Día"].unique() if x != "nan"])
+        with col3:
+            turnos = sorted(df_filtrado["Turno"].dropna().unique())
+            turno_sel = st.selectbox("Turno", ["Todos"] + turnos)
 
-        depto = st.multiselect("Departamento", depto_opts)
-        area = st.multiselect("Área", area_opts)
-        turno = st.multiselect("Turno", turno_opts)
-        dias = st.multiselect("Día", dia_opts)
+        if turno_sel != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["Turno"] == turno_sel]
 
-        btn_buscar = st.button("Aplicar Filtros", use_container_width=True)
+        st.markdown("### 📊 Resultados")
+        st.dataframe(df_filtrado, use_container_width=True)
 
-    # ========================
-    # FILTRADO
-    # ========================
-    if btn_buscar:
+        # Descargar Excel
+        output = BytesIO()
+        df_filtrado.to_excel(output, index=False, engine='openpyxl')
+        output.seek(0)
 
-        mask = pd.Series(True, index=df.index)
-
-        if depto:
-            mask &= df["Departamento"].isin(depto)
-
-        if area:
-            mask &= df["Área"].isin(area)
-
-        if turno:
-            mask &= df["Turno"].isin(turno)
-
-        if dias:
-            mask &= df["Día"].isin(dias)
-
-        resultados = df[mask]
-
-        st.success(f"Encontradas: {len(resultados)} vacantes")
-
-        for _, row in resultados.iterrows():
-            with st.container(border=True):
-
-                titulo = row["Área"] if row["Área"] != "nan" else "Sin Área"
-
-                st.markdown(f"### {titulo}")
-                st.caption(f"📍 {row['Centro']} - {row['Turno']}")
-                st.write(f"📅 {row['Día']} | 🕒 {row['Hora Inicio']} a {row['Hora Fin']}")
-
-                if "Texto Original" in df.columns and row["Texto Original"] != "nan":
-                    with st.expander("Ver detalles"):
-                        st.write(row["Texto Original"])
+        st.download_button(
+            label="📥 Descargar Excel",
+            data=output,
+            file_name="vacantes_filtradas.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
