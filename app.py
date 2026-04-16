@@ -6,41 +6,19 @@ from io import BytesIO
 
 st.set_page_config(page_title="Horas Vacantes UTU", layout="wide")
 
-st.title("📚 Buscador de Horas Vacantes UTU")
-st.markdown("Subí el PDF oficial y filtrá por Departamento, Centro y Turno.")
+st.title("📚 Buscador PRO de Horas Vacantes UTU")
+st.markdown("Versión estructurada por columnas reales del PDF.")
 
-uploaded_file = st.file_uploader("Subir PDF de Horas Vacantes", type="pdf")
+uploaded_file = st.file_uploader("Subir PDF oficial", type="pdf")
 
 
-# ----------------------------
-# FUNCIONES
-# ----------------------------
-
-def limpiar_texto(texto):
-    texto = texto.replace("\n", " ")
-    texto = re.sub(r"\s+", " ", texto)
-    return texto.strip()
-
+# --------------------------------------------------
+# FUNCIÓN PRO DE EXTRACCIÓN
+# --------------------------------------------------
 
 def extraer_datos(pdf):
+
     registros = []
-
-    with pdfplumber.open(pdf) as pdf_file:
-        texto = ""
-        for pagina in pdf_file.pages:
-            contenido = pagina.extract_text()
-            if contenido:
-                texto += contenido + "\n"
-
-    # Normalizar cortes raros del PDF
-    texto = texto.replace("NO\nCTURNO", "NOCTURNO")
-    texto = texto.replace("VESPERTINO/NO\nCTURNO", "VESPERTINO/NOCTURNO")
-
-    lineas = texto.split("\n")
-
-    departamento_actual = ""
-    centro_actual = ""
-    turno_actual = ""
 
     TURNOS_VALIDOS = [
         "MATUTINO",
@@ -51,63 +29,84 @@ def extraer_datos(pdf):
         "VESPERTINO/NOCTURNO"
     ]
 
-    for i, linea in enumerate(lineas):
-        linea = limpiar_texto(linea)
+    with pdfplumber.open(pdf) as pdf_file:
 
-        if not linea:
-            continue
+        for page in pdf_file.pages:
 
-        # Detectar Departamento (ej: 10 MONTEVIDEO)
-        if re.match(r"\d+\s+[A-ZÁÉÍÓÚÑ ]+$", linea):
-            departamento_actual = linea
+            words = page.extract_words()
 
-        # Detectar Centro Educativo
-        if (
-            "ESCUELA" in linea
-            or "INSTITUTO" in linea
-            or "C.E.C." in linea
-            or "C.E.A." in linea
-            or "POLO EDUCATIVO" in linea
-            or "ANEXO" in linea
-        ):
-            centro_actual = linea
+            # Agrupar palabras por posición vertical (misma fila)
+            filas = {}
+            for w in words:
+                y = round(w["top"], 1)
+                if y not in filas:
+                    filas[y] = []
+                filas[y].append(w)
 
-        # Detectar Turno
-        for turno in TURNOS_VALIDOS:
-            if turno in linea:
-                turno_actual = turno
+            departamento_actual = ""
+            centro_actual = ""
+            turno_actual = ""
 
-        # Detectar asignatura (líneas que contienen código tipo 1MATEMATICA, 1INGLES, etc.)
-        if re.search(r"\d[A-ZÁÉÍÓÚÑ]", linea):
-            registros.append({
-                "Departamento": departamento_actual,
-                "Centro": centro_actual,
-                "Asignatura": linea,
-                "Turno": turno_actual
-            })
+            for y in sorted(filas.keys()):
+
+                fila = filas[y]
+                fila = sorted(fila, key=lambda x: x["x0"])
+                texto_fila = " ".join([w["text"] for w in fila]).strip()
+
+                # Normalizar cortes raros
+                texto_fila = texto_fila.replace("NO CTURNO", "NOCTURNO")
+                texto_fila = texto_fila.replace("VESPERTINO/NO CTURNO", "VESPERTINO/NOCTURNO")
+
+                # Detectar Departamento
+                if re.match(r"\d+\s+[A-ZÁÉÍÓÚÑ ]+$", texto_fila):
+                    departamento_actual = texto_fila
+                    continue
+
+                # Detectar Centro
+                if any(x in texto_fila for x in ["ESCUELA", "INSTITUTO", "C.E.C.", "C.E.A.", "POLO", "ANEXO"]):
+                    centro_actual = texto_fila
+                    continue
+
+                # Detectar Turno
+                for turno in TURNOS_VALIDOS:
+                    if turno in texto_fila:
+                        turno_actual = turno
+
+                # Detectar asignatura (patrón típico: número + texto)
+                if re.search(r"\d+[A-ZÁÉÍÓÚÑ]", texto_fila):
+
+                    registros.append({
+                        "Departamento": departamento_actual,
+                        "Centro": centro_actual,
+                        "Asignatura": texto_fila,
+                        "Turno": turno_actual
+                    })
 
     df = pd.DataFrame(registros)
+
+    # Limpieza final
+    df = df[df["Asignatura"].str.len() > 5]
 
     return df
 
 
-# ----------------------------
+# --------------------------------------------------
 # APP
-# ----------------------------
+# --------------------------------------------------
 
 if uploaded_file:
 
-    with st.spinner("Procesando PDF..."):
+    with st.spinner("Reconstruyendo estructura del PDF..."):
         df = extraer_datos(uploaded_file)
 
     if df.empty:
-        st.error("No se pudieron extraer datos. Verificá el formato del PDF.")
+        st.error("No se detectaron registros. Revisar PDF.")
     else:
         st.success("PDF procesado correctamente.")
 
         col1, col2, col3 = st.columns(3)
 
-        # Filtro Departamento
+        # Departamento
         with col1:
             deptos = sorted(df["Departamento"].dropna().unique())
             depto_sel = st.selectbox("Departamento", ["Todos"] + deptos)
@@ -117,7 +116,7 @@ if uploaded_file:
         else:
             df_filtrado = df.copy()
 
-        # Filtro Centro
+        # Centro
         with col2:
             centros = sorted(df_filtrado["Centro"].dropna().unique())
             centro_sel = st.selectbox("Centro", ["Todos"] + centros)
@@ -125,7 +124,7 @@ if uploaded_file:
         if centro_sel != "Todos":
             df_filtrado = df_filtrado[df_filtrado["Centro"] == centro_sel]
 
-        # Filtro Turno
+        # Turno
         with col3:
             turnos = sorted(df_filtrado["Turno"].dropna().unique())
             turno_sel = st.selectbox("Turno", ["Todos"] + turnos)
