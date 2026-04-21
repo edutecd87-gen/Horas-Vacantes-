@@ -1,1 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Vacantes UTU</title>
+</head>
+<body>
 
+<h2>Subir PDF</h2>
+
+<input type="file" id="file">
+<button onclick="enviar()">Procesar</button>
+
+<script>
+async function enviar() {
+  const file = document.getElementById("file").files[0];
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("/api/procesar", {
+    method: "POST",
+    body: formData
+  });
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "vacantes.xlsx";
+  a.click();
+}
+</script>
+
+</body>
+</html>
